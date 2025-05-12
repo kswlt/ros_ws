@@ -1,0 +1,26 @@
+# C/C++ 编译文件
+*.o
+*.obj
+*.exe
+/build/
+/bin/
+/install/
+/log/
+
+# Java 编译文件
+*.class
+*.jar
+
+# Python 临时文件
+__pycache__
+*.pyc
+*.pyo
+
+# IDE 配置文件（如 Visual Studio）
+.vs/
+*.suo
+*.user
+
+# 忽略所有 .pcd 文件（如用户遇到的 252MB 文件）
+*.pcd
+/data/large_files/
