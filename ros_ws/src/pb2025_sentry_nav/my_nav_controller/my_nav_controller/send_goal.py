@@ -25,7 +25,7 @@ class NavigationClient(Node):
         # 创建 Action 客户端，连接到导航服务
         self.client = ActionClient(self, NavigateToPose, '/red_standard_robot1/navigate_to_pose')
 
-        # 订阅 STM32 发送的裁判系统数据
+        # 订阅 STM32 发送的裁判系统数据 (保留这个用于其他功能)
         self.subscription = self.create_subscription(
             Referee,
             'stm32_ros2_data',
@@ -39,13 +39,6 @@ class NavigationClient(Node):
         # 创建定时器，每秒发布一次状态
         self.timer = self.create_timer(1.0, self.publish_status)
 
-        # 创建上坡服务
-        self.climb_service = self.create_service(
-            Trigger, 
-            'start_climbing',
-            self.climb_service_callback
-        )
-
         # 导航状态变量
         self.current_goal_handle = None  # 记录当前导航状态
         self.is_navigating = False  # 当前导航状态
@@ -57,48 +50,17 @@ class NavigationClient(Node):
         
         # 上坡导航点序列 - 5个点从坡底到坡顶，根据实际坡道位置调整
         self.climbing_points = [
-            (-3.0, 0.0, 0.0),   # 坡道底部起点
-            (-3.0, 1.0, 0.0),   # 上坡1/4处
-            (-3.0, 2.0, 0.0),   # 上坡中点
-            (-3.0, 3.0, 0.0),   # 上坡3/4处
-            (-3.0, 4.0, 0.0)    # 坡道顶部
+            (-1.22, 2.11, 0.0),   # 坡道底部起点
+            (0.64, 1.90, 0.0),   # 上坡1/4处
+            (0.96, 2.07, 0.0),   # 上坡中点
+            (0.89, 3.22, 0.0),   # 上坡3/4处
+            (-0.78, 3.33, 0.0)    # 坡道顶部
         ]
         
-        self.get_logger().info("导航节点初始化完成，上坡功能已准备就绪")
+        self.get_logger().info("导航节点初始化完成，准备开始上坡")
         
-        # 注释掉其他初始化代码...
-        """
-        # 预定义目标点位置字典
-        self.target_points = {
-            # ...
-        }
-
-        # 巡逻点定义 - 三个巡逻点的坐标
-        self.patrol_points = [
-            # ...
-        ]
-        
-        self.current_condition = 0  # 记录当前目标编号
-        
-        # 巡逻模式相关变量
-        self.patrol_mode = False  # 巡逻模式开关
-        self.current_patrol_index = 0  # 当前巡逻点索引
-        self.patrol_timer = None  # 巡逻计时器
-        self.normal_patrol = True  # 是否处于正常巡逻（1和2之间）
-        
-        # 血量监控相关变量
-        self.last_hp = None  # 上次的血量值
-        self.hp_history = []  # 存储最近的血量记录 [(timestamp, hp)]
-        self.hp_window = 1.0  # 计算掉血速度的时间窗口（秒）
-        self.low_hp_threshold = 90  # 低血量阈值，改为90
-        self.is_returning_home = False  # 是否正在前往安全点
-        
-        # 初始化完成后直接启动巡逻模式
-        self.get_logger().info("系统初始化完成，直接进入巡逻模式")
-        self.patrol_mode = True
-        # 使用定时器延迟一下启动巡逻，确保系统完全初始化
-        self.create_timer(2.0, self.delayed_start_patrol)
-        """
+        # 使用定时器延迟一下启动上坡，确保系统完全初始化
+        self.create_timer(2.0, self.delayed_start_climbing)
 
     def send_goal(self, x, y, yaw):
         """发送导航目标点"""
@@ -227,46 +189,9 @@ class NavigationClient(Node):
         self.current_goal_handle = None  # 清除当前任务
 
     def condition_callback(self, msg):
-        """接收 STM32 传来的数据，处理简化后的命令"""
-        # 使用简单的条件触发上坡功能
-        if msg.game_progress == 5 and msg.remain_hp == 100:  # 这是上坡的触发信号
-            self.get_logger().info("检测到上坡信号")
-            self.start_climbing()
-        
-        # 注释掉其他功能代码...
-        """
-        # 血量检测逻辑
-        current_time = time.time()
-        current_hp = msg.remain_hp
-        
-        # 定义最大血量值
-        max_hp = 100  # 假设最大血量为100，根据实际情况调整
-        
-        # 如果血量低于阈值并且不是在前往安全点，则去安全点
-        if current_hp < self.low_hp_threshold and self.normal_patrol and self.patrol_mode:
-            # ...
-            
-        # 如果血量回满，恢复正常巡逻
-        if current_hp >= max_hp and not self.normal_patrol and self.patrol_mode:
-            # ...
-    
-        # 更新最后血量记录
-        self.last_hp = current_hp
-        self.hp_history.append((current_time, current_hp))
-        
-        # 移除超出时间窗口的记录
-        while self.hp_history and (current_time - self.hp_history[0][0] > self.hp_window):
-            self.hp_history.pop(0)
-        
-        # 保留停止巡逻模式的功能
-        if msg.game_progress == 4 and msg.remain_hp == 888:  # 停止巡逻模式的条件
-            self.stop_patrol()
-            return
-            
-        # 如果正在巡逻模式，忽略普通导航命令
-        if self.patrol_mode:
-            return
-        """
+        """接收 STM32 传来的数据"""
+        # 删除上坡触发逻辑，这里可以保留空函数，或者添加其他需要的功能
+        pass
 
     def publish_status(self):
         """每秒发布导航状态 (1=导航中, 0=未导航)"""
