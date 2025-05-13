@@ -227,6 +227,9 @@ class NavigationClient(Node):
         current_time = time.time()
         current_hp = msg.remain_hp
         
+        # 定义最大血量值
+        max_hp = 100  # 假设最大血量为100，根据实际情况调整
+        
         # 如果血量低于阈值并且不是在前往安全点，则去安全点
         if current_hp < self.low_hp_threshold and self.normal_patrol and self.patrol_mode:
             self.get_logger().warn(f"血量低于安全阈值({self.low_hp_threshold})! 当前血量: {current_hp}")
@@ -243,9 +246,9 @@ class NavigationClient(Node):
             self.send_goal(x, y, yaw)
             return
             
-        # 如果血量恢复到安全水平，恢复正常巡逻
-        if current_hp >= self.low_hp_threshold + 10 and not self.normal_patrol and self.patrol_mode:
-            self.get_logger().info(f"血量已恢复到安全水平: {current_hp}，重新开始正常巡逻")
+        # 如果血量回满，恢复正常巡逻
+        if current_hp >= max_hp and not self.normal_patrol and self.patrol_mode:
+            self.get_logger().info(f"血量已回满: {current_hp}，重新开始正常巡逻")
             self.normal_patrol = True
             self.is_returning_home = False
             
