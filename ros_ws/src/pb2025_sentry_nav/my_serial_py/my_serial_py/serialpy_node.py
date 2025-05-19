@@ -35,6 +35,15 @@ class SerialNode(Node):
         # 创建定时器，定期读取串口数据
         self.timer = self.create_timer(0.1, self.read_serial_data)
 
+        # 添加订阅特殊巡逻路径状态
+        self.special_path = False
+        self.subscription_patrol_state = self.create_subscription(
+            Int8, 
+            'patrol_state',
+            self.patrol_state_callback, 
+            10
+        )
+
     def read_serial_data(self):
         if self.serial_conn and self.serial_conn.is_open:
             try:
@@ -79,18 +88,31 @@ class SerialNode(Node):
         self.publisher_.publish(msg)
     def Nav2Stat_callback(self,msg):
          self.Status_nav2 = msg.data
+    def patrol_state_callback(self, msg):
+        """接收巡逻路径状态"""
+        self.special_path = (msg.data == 1)
+        self.get_logger().info(f"巡逻状态更新: 特殊路径={self.special_path}")
+
     def SendtoSTM32_callback(self, msg):
-        # 接收来自ROS2的指令，并发送给单片机
+        """接收来自ROS2的指令，并发送给单片机"""
         if self.serial_conn and self.serial_conn.is_open:
             try:
                 # 数据字段定义
                 header = 0xAA
                 checksum = 19
-                x_speed = msg.linear.x *0.5
-                y_speed = msg.linear.y *0.5
-                rotate = msg.angular.z
-                yaw_speed = msg.angular.z
+                x_speed = msg.linear.x * 0.5
+                y_speed = msg.linear.y * 0.5
+                
+                # 根据特殊路径状态设置rotate值
+                if self.special_path:
+                    rotate = 1.0  # 从巡逻点3到巡逻点5时设置为1
+                    self.get_logger().info("特殊路径上: rotate=1.0")
+                else:
+                    rotate = 0.0  # 其他情况设置为0
+                
+                yaw_speed = msg.angular.z  # yaw_speed保持不变
                 running_state = 0x00
+                
                 data_frame = struct.pack(
                     '<BBffffB',  # 格式化字符串：<表示小端，B表示uint8_t，f表示float
                     header,         # uint8_t
@@ -103,7 +125,7 @@ class SerialNode(Node):
                 )
                 # 发送数据
                 self.serial_conn.write(data_frame)
-                self.get_logger().info('Sent data to STM32')
+                self.get_logger().info(f'Sent data to STM32: x_speed={x_speed}, y_speed={y_speed}, rotate={rotate}')
             except serial.SerialException as e:
                 self.get_logger().error(f'Error sending data to STM32: {e}')
         else:

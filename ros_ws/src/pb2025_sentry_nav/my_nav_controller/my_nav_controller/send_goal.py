@@ -85,6 +85,12 @@ class NavigationClient(Node):
         self.low_hp_threshold = 90  # 低血量阈值，改为90
         self.is_returning_home = False  # 是否正在前往安全点
         
+        # 添加巡逻路径状态发布器
+        self.patrol_state_publisher = self.create_publisher(Int8, 'patrol_state', 10)
+        
+        # 是否在特殊路径上的标志
+        self.special_path = False
+        
         # 初始化完成后直接启动巡逻模式
         self.get_logger().info("系统初始化完成，准备开始8点巡逻模式")
         self.patrol_mode = True
@@ -168,15 +174,28 @@ class NavigationClient(Node):
             self.destroy_timer(self.patrol_timer)
             self.patrol_timer = None
             
+        # 保存上一个巡逻点索引
+        prev_index = self.current_patrol_index
+        
         if self.normal_patrol:
             # 正常巡逻在8个点之间循环
             self.current_patrol_index = (self.current_patrol_index + 1) % 8  # 8点循环
         else:
             # 如果不是正常巡逻，则前往安全点
             self.current_patrol_index = self.safe_point_index
-            
+    
+        # 检查是否在从巡逻点3到巡逻点5的路径上
+        self.special_path = (prev_index == 2 and self.current_patrol_index == 4)
+        
+        # 发布路径状态 (1=特殊路径需要旋转, 0=普通路径)
+        state_msg = Int8()
+        state_msg.data = 1 if self.special_path else 0
+        self.patrol_state_publisher.publish(state_msg)
+        
         x, y, yaw = self.patrol_points[self.current_patrol_index]
         self.get_logger().info(f"巡逻中: 前往第 {self.current_patrol_index+1}/8 个巡逻点")
+        if self.special_path:
+            self.get_logger().info("特殊路径: 从巡逻点3到巡逻点5，启用旋转")
         self.send_goal(x, y, yaw)
 
     def start_patrol(self):
