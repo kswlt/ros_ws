@@ -1,4 +1,4 @@
-#区域塞半场基本功能实现
+#区域塞半场基本功能实现第二版
 
 # 导入必要的库
 import time  # 用于时间相关操作
@@ -105,6 +105,11 @@ class NavigationClient(Node):
         self.current_target = 1  # 初始目标点为1
         self.robot_state = "初始化"  # 机器人当前状态
         
+        # 添加死亡状态相关变量
+        self.is_dead = False  # 是否已死亡
+        self.death_time = None  # 死亡时间
+        self.revival_count = 0  # 复活次数计数
+        
         # 初始化完成
         self.get_logger().info("导航系统初始化完成，等待比赛开始...")
 
@@ -195,6 +200,59 @@ class NavigationClient(Node):
         self.current_hp = msg.remain_hp
         self.current_ammo = msg.bullet_remaining_num_17mm
         
+        # ===== 死亡和复活检测 =====
+        # 检测死亡状态
+        if self.current_hp == 0 and not self.is_dead:
+            self.is_dead = True
+            self.death_time = time.time()
+            self.get_logger().warn("哨兵血量为0，进入死亡状态！停止所有导航任务")
+            
+            # 取消当前导航任务
+            if self.is_navigating:
+                self.cancel_goal()
+                
+            # 更新机器人状态
+            self.robot_state = "死亡状态，等待复活"
+            
+            # 发布状态更新
+            current_time = time.time()
+            game_duration = current_time - self.game_start_time if self.game_has_started else 0
+            game_mins = int(game_duration / 60)
+            game_secs = int(game_duration % 60)
+            self.publish_strategy_status(game_mins, game_secs)
+            return
+            
+        # 检测复活状态
+        if self.current_hp > 0 and self.is_dead:
+            revival_time = time.time() - self.death_time if self.death_time else 0
+            self.revival_count += 1
+            self.is_dead = False
+            self.get_logger().info(f"哨兵已复活！死亡持续时间: {revival_time:.2f}秒, 第{self.revival_count}次复活")
+            
+            # 更新机器人状态
+            self.robot_state = "已复活，恢复导航"
+            
+            # 如果比赛已开始，恢复导航行为
+            if self.game_has_started:
+                # 根据当前血量决定导航目标
+                if self.current_hp < self.hp_threshold_critical:
+                    self.navigate_to_point(5)  # 血量危急，前往回血点
+                    self.robot_state = "复活后血量危急，前往回血点"
+                else:
+                    self.navigate_to_point(1)  # 血量正常，前往目标点1
+                    self.robot_state = "复活后血量正常，前往目标点1"
+        
+        # 如果处于死亡状态，跳过所有导航逻辑
+        if self.is_dead:
+            # 即使在死亡状态也更新比赛时间
+            current_time = time.time()
+            game_duration = current_time - self.game_start_time if self.game_has_started else 0
+            game_mins = int(game_duration / 60)
+            game_secs = int(game_duration % 60)
+            self.publish_strategy_status(game_mins, game_secs)
+            return
+        
+        # ===== 以下是正常导航逻辑 =====
         # 检查比赛是否开始
         if msg.game_progress == 4 and not self.game_has_started:
             self.game_has_started = True
@@ -294,8 +352,16 @@ class NavigationClient(Node):
     def publish_strategy_status(self, game_mins, game_secs):
         """发布当前策略和状态信息"""
         status_msg = String()
+        
+        # 如果处于死亡状态，添加死亡时间信息
+        death_info = ""
+        if self.is_dead and self.death_time:
+            death_duration = time.time() - self.death_time
+            death_info = f"死亡时间: {int(death_duration)}秒 | "
+        
         status_msg.data = (
             f"比赛时间: {game_mins}分{game_secs}秒 | "
+            f"{death_info}"
             f"血量: {self.current_hp} | "
             f"弹药: {self.current_ammo} | "
             f"目标点: {self.current_target} | "
