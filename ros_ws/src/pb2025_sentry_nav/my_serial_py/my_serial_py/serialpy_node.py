@@ -27,7 +27,7 @@ class SerialNode(Node):
             self.destroy_node()
             rclpy.shutdown()
         # 创建订阅者，订阅导航数据话题，把计算好的数据发给单片机/red_standard_robot1/cmd_vel_nav2_result 
-        self.subscription = self.create_subscription(Twist, '/red_standard_robot1/cmd_vel_nav2_result', self.SendtoSTM32_callback, 10)
+        self.subscription = self.create_subscription(Twist, '/red_standard_robot1/cmd_vel', self.SendtoSTM32_callback, 10)
         self.subscription_1 = self.create_subscription(Int8, 'nav2_status',self.Nav2Stat_callback,10)
         # 创建发布者,将接受到的来自单片机的数据发布到/stm32_ros2_data话题
         self.publisher_ = self.create_publisher(Referee, 'stm32_ros2_data', 10)

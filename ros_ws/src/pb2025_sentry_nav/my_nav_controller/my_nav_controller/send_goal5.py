@@ -1,3 +1,4 @@
+#去中心高低策略
 #区域塞半场基本功能实现第二版
 
 # 导入必要的库
@@ -110,6 +111,25 @@ class NavigationClient(Node):
         self.death_time = None  # 死亡时间
         self.revival_count = 0  # 复活次数计数
         
+        # 上下坡相关变量
+        self.is_climbing = False  # 是否正在上坡
+        self.is_descending = False  # 是否正在下坡
+        self.slope_index = 0  # 当前坡道导航点索引
+        self.at_hill_top = False  # 是否在山顶
+        
+        # 上下坡导航点序列
+        self.slope_points = [
+            (-3.7, 2.30, 0.0),   # 坡底 - 点1
+            (-3.2, 2.55, 0.0),   # 坡中间 - 点2
+            (-2.7, 2.80, 0.0)    # 坡顶 - 点3
+        ]
+        
+        # 山顶点
+        self.hill_top_points = [
+            (-2.3, 3.10, 0.0),  # 点4
+            (-1.8, 3.40, 0.0)   # 点5
+        ]
+        
         # 初始化完成
         self.get_logger().info("导航系统初始化完成，等待比赛开始...")
 
@@ -152,21 +172,50 @@ class NavigationClient(Node):
             
         status = future.result().status
         if status == GoalStatus.STATUS_SUCCEEDED:
-            self.get_logger().info(f"导航成功到达目标点{self.current_target}")
+            self.get_logger().info("导航成功到达目标点")
             
+            # 如果正在上坡或下坡，继续到下一个坡道点
+            if self.is_climbing or self.is_descending:
+                self.navigate_to_next_slope_point()
+                return
+                
+            # 如果当前目标是山顶点4（上坡后的第一个点）
+            if self.current_target == "hilltop_1":
+                self.get_logger().info("已到达山顶点4，前往山顶点5")
+                x, y, yaw = self.hill_top_points[1]
+                self.send_goal(x, y, yaw)
+                self.current_target = "hilltop_2"
+                self.robot_state = "前往山顶点5"
+                return
+                
+            # 如果当前目标是山顶点5（上坡后的最后一个点）
+            if self.current_target == "hilltop_2":
+                self.get_logger().info("已到达山顶点5，停留在此")
+                self.at_hill_top = True
+                self.robot_state = "在山顶点5停留"
+                return
+                
+            # 如果到达了回血点，设置恢复状态
+            if self.current_target == 5:
+                self.is_healing = True
+                self.get_logger().info("已到达回血点，等待血量恢复...")
+                return
+                
             # 如果到达了目标点2，记录时间
             if self.current_target == 2:
                 self.target_point2_arrival_time = time.time()
                 self.waiting_at_point2 = True
                 self.get_logger().info(f"已到达目标点2，开始等待{self.point2_wait_time}秒观察是否掉血")
             
-            # 如果到达了回血点，设置恢复状态
-            elif self.current_target == 5:
-                self.is_healing = True
-                self.get_logger().info("已到达回血点，等待血量恢复...")
-            
         else:
             self.get_logger().warn(f"导航失败，状态码: {status}")
+            
+            # 如果上坡/下坡导航失败，也尝试继续下一个点
+            if (self.is_climbing or self.is_descending):
+                self.get_logger().warn("坡道导航点失败，尝试继续下一个点")
+                self.navigate_to_next_slope_point()
+                return
+                
             # 5秒后重试当前目标点
             self.create_timer(5.0, lambda: self.retry_current_goal())
             
@@ -208,11 +257,10 @@ class NavigationClient(Node):
             game_time_str = time.strftime('%H:%M:%S', time.localtime(self.game_start_time))
             self.get_logger().info(f"比赛开始! 时间: {game_time_str}")
             
-            # 比赛开始，前往目标点1
-            self.navigate_to_point(1)
-            self.robot_state = "前往目标点1"
+            # 比赛开始，调用上坡函数
+            self.climb_slope()
             return
-            
+    
         # 如果比赛未开始，不进行任何导航逻辑
         if not self.game_has_started:
             return
@@ -304,14 +352,22 @@ class NavigationClient(Node):
             self.robot_state = f"{reason}，紧急前往回血点"
             return
             
+        # 紧急情况：在山顶且血量低于200或弹药量低于40，则下坡并前往回血点
+        if self.at_hill_top and (self.current_hp < 200 or self.current_ammo < 40) and not self.is_healing and not self.is_descending:
+            reason = "血量低于200" if self.current_hp < 200 else "弹药少于40"
+            self.get_logger().warn(f"{reason}! 开始下坡并前往回血点")
+            self.at_hill_top = False
+            self.descend_slope()
+            return
+        
         # 在回血点恢复时，检查血量是否恢复到目标值
         if self.is_healing and self.current_hp >= self.hp_threshold_high:
             self.is_healing = False
-            self.get_logger().info(f"血量已恢复到{self.current_hp}，前往目标点1")
-            self.navigate_to_point(1)
-            self.robot_state = "血量恢复完成，返回目标点1"
+            self.get_logger().info(f"血量已恢复到{self.current_hp}，开始上坡")
+            # 血量恢复后重新上坡
+            self.climb_slope()
             return
-            
+        
         # 根据血量调整目标点
         if not self.is_navigating and not self.is_healing:
             if self.hp_threshold_medium_low < self.current_hp < self.hp_threshold_medium:
@@ -376,14 +432,95 @@ class NavigationClient(Node):
         q.w = math.cos(yaw / 2.0)
         return q
 
-def main(args=None):
-    rclpy.init(args=args)
-    nav_client = NavigationClient()
-    rclpy.spin(nav_client)  # 让节点一直运行，等待消息
-    nav_client.destroy_node()
-    rclpy.shutdown()
+    def climb_slope(self):
+        """开始上坡功能，通过3个导航点引导机器人上坡"""
+        # 如果已经在上坡模式，直接返回
+        if self.is_climbing or self.is_descending:
+            self.get_logger().info("已经处于上/下坡模式")
+            return
+        
+        # 取消当前任务（如果有）
+        if self.is_navigating:
+            self.cancel_goal()
+        
+        # 设置上坡状态
+        self.is_climbing = True
+        self.slope_index = 0
+        
+        self.get_logger().info("开始上坡")
+        self.robot_state = "开始上坡"
+        
+        # 导航到第一个上坡点
+        self.navigate_to_next_slope_point()
 
-if __name__ == '__main__':
-    main()
+    def descend_slope(self):
+        """开始下坡功能，通过3个导航点引导机器人下坡"""
+        # 如果已经在下坡模式，直接返回
+        if self.is_climbing or self.is_descending:
+            self.get_logger().info("已经处于上/下坡模式")
+            return
+        
+        # 取消当前任务（如果有）
+        if self.is_navigating:
+            self.cancel_goal()
+        
+        # 设置下坡状态
+        self.is_descending = True
+        self.slope_index = 2  # 从坡顶开始
+        
+        self.get_logger().info("开始下坡")
+        self.robot_state = "开始下坡"
+        
+        # 导航到第一个下坡点（坡顶）
+        self.navigate_to_next_slope_point()
+
+    def navigate_to_next_slope_point(self):
+        """导航到下一个坡道点"""
+        # 检查是否处于上坡或下坡模式
+        if not (self.is_climbing or self.is_descending):
+            return
+        
+        # 获取当前要导航的坡道点
+        if self.is_climbing:
+            # 检查是否已完成所有上坡点
+            if self.slope_index >= len(self.slope_points):
+                self.get_logger().info("上坡完成，前往山顶点4")
+                self.is_climbing = False
+                # 前往山顶点4
+                x, y, yaw = self.hill_top_points[0]
+                self.send_goal(x, y, yaw)
+                self.current_target = "hilltop_1"
+                self.robot_state = "前往山顶点4"
+                return
+            
+            x, y, yaw = self.slope_points[self.slope_index]
+            self.get_logger().info(f"上坡: 前往第 {self.slope_index+1}/3 个点 ({x}, {y})")
+            self.robot_state = f"上坡: 前往点{self.slope_index+1}"
+            
+            # 发送导航目标
+            self.send_goal(x, y, yaw)
+            
+            # 增加索引，准备下一个点
+            self.slope_index += 1
+        
+        elif self.is_descending:
+            # 检查是否已完成所有下坡点
+            if self.slope_index < 0:
+                self.get_logger().info("下坡完成，前往回血点")
+                self.is_descending = False
+                # 前往回血点
+                self.navigate_to_point(5)  # 回血点
+                self.robot_state = "下坡完成，前往回血点"
+                return
+            
+            x, y, yaw = self.slope_points[self.slope_index]
+            self.get_logger().info(f"下坡: 前往第 {3-self.slope_index}/3 个点 ({x}, {y})")
+            self.robot_state = f"下坡: 前往点{self.slope_index+1}"
+            
+            # 发送导航目标
+            self.send_goal(x, y, yaw)
+            
+            # 减少索引，准备下一个点
+            self.slope_index -= 1
 
 
