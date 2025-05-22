@@ -222,7 +222,7 @@ class NavigationClient(Node):
             else:
                 self.get_logger().info("基地血量不足，准备前往目标点2")
                 self.robot_state = "开始比赛，准备出发"
-                self.send_goal_with_delay(2, 3.0)  # 开始时使用较短延迟
+                self.send_goal_with_delay(2, 5.0)  # 开始时使用较短延迟
             return
             
         # 如果比赛未开始，不执行其他逻辑
@@ -238,7 +238,7 @@ class NavigationClient(Node):
             # 紧急情况使用较短延迟
             self.cancel_goal()
             self.robot_state = f"{reason}，准备前往回血点"
-            self.send_goal_with_delay(3, 2.0)  # 紧急情况使用较短延迟
+            self.send_goal_with_delay(3, 5.0)  # 紧急情况使用较短延迟
             return
             
         # ===== 回血点计时 =====
