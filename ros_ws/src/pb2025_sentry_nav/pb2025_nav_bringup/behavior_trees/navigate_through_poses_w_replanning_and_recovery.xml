@@ -3,7 +3,7 @@
       main_tree_to_execute="MainTree">
   <BehaviorTree ID="MainTree">
     <RecoveryNode name="NavigateRecovery"
-                  number_of_retries="10">
+                  number_of_retries="30">
       <PipelineSequence name="NavigateWithReplanning">
         <RateController hz="3.0">
           <RecoveryNode name="ComputePathThroughPoses"
@@ -21,25 +21,27 @@
           </RecoveryNode>
         </RateController>
         <RecoveryNode name="FollowPath"
-                      number_of_retries="10">
+                      number_of_retries="30">
           <FollowPath path="{path}"
                       controller_id="FollowPath"/>
-          <ClearEntireCostmap name="ClearLocalCostmap-Context"
-                              service_name="local_costmap/clear_entirely_local_costmap"/>
+          <Sequence name="WaitBeforeClearingCostmap">
+            <Wait wait_duration="5.0" name="WaitOnObstacle"/>
+            <ClearEntireCostmap name="ClearLocalCostmap-Context"
+                                service_name="local_costmap/clear_entirely_local_costmap"/>
+          </Sequence>
         </RecoveryNode>
       </PipelineSequence>
       <ReactiveFallback name="RecoveryFallback">
         <GoalUpdated/>
-        <RoundRobin name="RecoveryActions">
+        <Sequence name="WaitAndClear">
+          <Wait wait_duration="5.0" name="WaitOnGlobalIssue"/>
           <Sequence name="ClearingActions">
             <ClearEntireCostmap name="ClearLocalCostmap-Subtree"
                                 service_name="local_costmap/clear_entirely_local_costmap"/>
             <ClearEntireCostmap name="ClearGlobalCostmap-Subtree"
                                 service_name="global_costmap/clear_entirely_global_costmap"/>
           </Sequence>
-          <!-- <BackUp backup_dist="1.0"
-                  backup_speed="1.0"/> -->
-        </RoundRobin>
+        </Sequence>
       </ReactiveFallback>
     </RecoveryNode>
   </BehaviorTree>

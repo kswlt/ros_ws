@@ -11,30 +11,35 @@
             <ComputePathToPose goal="{goal}"
                                path="{path}"
                                planner_id="GridBased"/>
-            <ClearEntireCostmap name="ClearGlobalCostmap-Context"
-                                service_name="global_costmap/clear_entirely_global_costmap"/>
+            <Sequence name="WaitBeforeClearingGlobalCostmap">
+              <Wait wait_duration="5.0" name="WaitOnPathPlanning"/>
+              <ClearEntireCostmap name="ClearGlobalCostmap-Context"
+                                  service_name="global_costmap/clear_entirely_global_costmap"/>
+            </Sequence>
           </RecoveryNode>
         </RateController>
         <RecoveryNode name="FollowPath"
                       number_of_retries="10">
           <FollowPath path="{path}"
                       controller_id="FollowPath"/>
-          <ClearEntireCostmap name="ClearLocalCostmap-Context"
-                              service_name="local_costmap/clear_entirely_local_costmap"/>
+          <Sequence name="WaitBeforeClearingLocalCostmap">
+            <Wait wait_duration="5.0" name="WaitOnObstacle"/>
+            <ClearEntireCostmap name="ClearLocalCostmap-Context"
+                                service_name="local_costmap/clear_entirely_local_costmap"/>
+          </Sequence>
         </RecoveryNode>
       </PipelineSequence>
       <ReactiveFallback name="RecoveryFallback">
         <GoalUpdated/>
-        <RoundRobin name="RecoveryActions">
+        <Sequence name="WaitAndClear">
+          <Wait wait_duration="5.0" name="WaitOnGlobalFailure"/>
           <Sequence name="ClearingActions">
             <ClearEntireCostmap name="ClearLocalCostmap-Subtree"
                                 service_name="local_costmap/clear_entirely_local_costmap"/>
             <ClearEntireCostmap name="ClearGlobalCostmap-Subtree"
                                 service_name="global_costmap/clear_entirely_global_costmap"/>
           </Sequence>
-          <!-- <BackUp backup_dist="1.0"
-                  backup_speed="1.0"/> -->
-        </RoundRobin>
+        </Sequence>
       </ReactiveFallback>
     </RecoveryNode>
   </BehaviorTree>
