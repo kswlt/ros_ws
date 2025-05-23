@@ -36,9 +36,9 @@ class NavigationClient(Node):
 
         # 目标点集合 - 简化为3个主要点和1个过渡点
         self.target_points = {
-            1: (-1.39, 5.17, 0.0),    # 目标点1 - 基地血量高时的停留点
+            1: (-5.39, -5.17, 0.0),    # 目标点1 - 基地血量高时的停留点
             2: (-5.99, -5.68, 0.0),   # 目标点2 - 基地血量低时的停留点
-            3: (-3.53, 3.54, 0.0),    # 回血点 - 用于回血和补给
+            3: (-1.16, -0.33, 0.0),    # 回血点 - 用于回血和补给
             5: (-1.39, 1.01, 0.0)     # 目标点5 - 从回血点返回后的中转点
         }
 
@@ -55,16 +55,20 @@ class NavigationClient(Node):
         self.current_ammo = 100             # 当前弹药量
         self.red_base_hp = 5000             # 红方基地血量
         self.is_healing = False             # 是否在回血点
+        self.is_going_to_heal = False       # 是否正在前往回血点
         self.healing_start_time = None      # 开始回血的时间
+        self.navigating_to_heal_point_id = 3 # 定义回血点ID
         
         # 回血和目标选择阈值
-        self.low_hp_threshold = 100         # 低血量阈值
+        self.low_hp_threshold = 390         # 低血量阈值
+        self.high_hp_threshold = 580        # 血量回满阈值，接近满血600
         self.low_ammo_threshold = 20        # 低弹药阈值
+        self.high_ammo_threshold = 90       # 弹药充足阈值
         self.base_hp_threshold = 3000       # 基地血量决策阈值
-        self.healing_time = 5.0             # 回血时间(秒)
+        self.healing_time = 5.0             # 回血时间(秒)，作为备用
         
         # 添加目标点发送延迟相关变量
-        self.goal_delay = 5.0               # 两个目标点之间的延迟时间(秒)
+        self.goal_delay = 1.0               # 两个目标点之间的延迟时间(秒)
         self.next_goal_timer = None         # 延迟发送的定时器
         self.delayed_target = None          # 延迟发送的目标点ID
         
@@ -90,7 +94,7 @@ class NavigationClient(Node):
         self.current_target = target_id
         self.get_logger().info(f"发送目标点{target_id}: x={x}, y={y}, yaw={yaw}")
 
-        self.client.wait_for_server(timeout_sec=5.0)
+        self.client.wait_for_server(timeout_sec=1.0)
         future = self.client.send_goal_async(goal_msg)
         future.add_done_callback(self.goal_response_callback)
         
@@ -153,11 +157,12 @@ class NavigationClient(Node):
             self.get_logger().info(f"导航成功到达目标点{self.current_target}")
             
             # 到达目标点后的行为
-            if self.current_target == 3:  # 回血点
-                # 到达回血点，开始计时
+            if self.current_target == self.navigating_to_heal_point_id:  # 回血点
+                # 到达回血点，开始回血
                 self.is_healing = True
+                self.is_going_to_heal = False  # 重置"正在前往回血点"标志
                 self.healing_start_time = time.time()
-                self.get_logger().info(f"已到达回血点，开始回血，等待{self.healing_time}秒")
+                self.get_logger().info(f"已到达回血点，开始回血，等待血量达到{self.high_hp_threshold}")
                 self.robot_state = "在回血点回血中"
                 return
                 
@@ -173,8 +178,14 @@ class NavigationClient(Node):
                 
         else:
             self.get_logger().warn(f"导航失败，状态码: {status}")
+            
+            # 如果前往回血点失败，重置标志
+            if self.current_target == self.navigating_to_heal_point_id and self.is_going_to_heal:
+                self.get_logger().warn("前往回血点失败")
+                self.is_going_to_heal = False
+                
             # 5秒后重试导航
-            retry_timer = self.create_timer(5.0, lambda: self.retry_navigation(self.current_target))
+            retry_timer = self.create_timer(1.0, lambda: self.retry_navigation(self.current_target))
             # 确保这个定时器是一次性的
             self.create_timer(0.1, lambda: self.destroy_timer(retry_timer))
 
@@ -218,11 +229,11 @@ class NavigationClient(Node):
             if self.red_base_hp >= self.base_hp_threshold:
                 self.get_logger().info("基地血量充足，准备前往目标点1")
                 self.robot_state = "开始比赛，准备出发"
-                self.send_goal_with_delay(1, 3.0)  # 开始时使用较短延迟
+                self.send_goal_with_delay(1, 1.0)  # 开始时使用较短延迟
             else:
                 self.get_logger().info("基地血量不足，准备前往目标点2")
                 self.robot_state = "开始比赛，准备出发"
-                self.send_goal_with_delay(2, 5.0)  # 开始时使用较短延迟
+                self.send_goal_with_delay(2, 1.0)  # 开始时使用较短延迟
             return
             
         # 如果比赛未开始，不执行其他逻辑
@@ -231,32 +242,43 @@ class NavigationClient(Node):
             
         # ===== 检查是否需要前往回血点 =====
         if (self.current_hp < self.low_hp_threshold or 
-            self.current_ammo < self.low_ammo_threshold) and not self.is_healing:
+            self.current_ammo < self.low_ammo_threshold) and \
+           not self.is_healing and \
+           not self.is_going_to_heal and \
+           (self.delayed_target != self.navigating_to_heal_point_id):  # 避免当延迟目标已经是回血点时还重入
+            
             reason = "血量不足" if self.current_hp < self.low_hp_threshold else "弹药不足"
             self.get_logger().warn(f"{reason}，准备前往回血点")
             
             # 紧急情况使用较短延迟
             self.cancel_goal()
             self.robot_state = f"{reason}，准备前往回血点"
-            self.send_goal_with_delay(3, 5.0)  # 紧急情况使用较短延迟
+            self.is_going_to_heal = True  # 设置标志，表示已经决定要去回血点
+            self.send_goal_with_delay(self.navigating_to_heal_point_id, 1.0)
             return
             
-        # ===== 回血点计时 =====
-        if self.is_healing and self.healing_start_time:
-            healing_duration = time.time() - self.healing_start_time
-            
-            # 回血时间到，离开回血点前往目标点5，使用延迟发送
-            if healing_duration >= self.healing_time:
+        # ===== 回血点检测 =====
+        if self.is_healing:
+            # 只检查血量是否已经回满，不再检查弹药
+            if self.current_hp >= self.high_hp_threshold:
+                # 血量已充足，可以离开
                 self.is_healing = False
                 self.healing_start_time = None
-                self.get_logger().info(f"回血完成，准备前往目标点5")
-                self.robot_state = "回血完成，准备出发"
-                self.send_goal_with_delay(5)
-                return
                 
-            # 更新回血状态
-            remaining_time = max(0, self.healing_time - healing_duration)
-            self.robot_state = f"回血中...剩余{remaining_time:.1f}秒"
+                # 根据基地血量直接决定下一个目标点，不需要经过中转点5
+                if self.red_base_hp >= self.base_hp_threshold:
+                    self.get_logger().info(f"回血完成，基地血量充足，直接前往目标点1")
+                    self.robot_state = "回血完成，准备出发前往目标点1"
+                    self.send_goal_with_delay(1)
+                else:
+                    self.get_logger().info(f"回血完成，基地血量不足，直接前往目标点2")
+                    self.robot_state = "回血完成，准备出发前往目标点2"
+                    self.send_goal_with_delay(2)
+                return
+            else:
+                # 血量还不足，继续回血
+                hp_needed = self.high_hp_threshold - self.current_hp
+                self.robot_state = f"回血中...还需补充血量{hp_needed}"
                 
         # 发布当前策略状态
         self.publish_strategy_status()

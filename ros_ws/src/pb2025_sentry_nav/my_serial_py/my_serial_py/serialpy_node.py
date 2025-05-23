@@ -16,16 +16,11 @@ class SerialNode(Node):
         self.baud_rate = 115200
         self.get_logger().info(f'Serial port set to: {self.serial_port}')
         self.Status_nav2 = 0
+        self.reconnect_attempts = 0
+        self.max_reconnect = 5
         # 初始化串口
         self.serial_conn = None
-        try:
-            self.serial_conn = serial.Serial(self.serial_port, self.baud_rate, timeout=1)
-            self.get_logger().info(f'Connected to {self.serial_port} at {self.baud_rate} baud rate.')
-        except serial.SerialException as e:
-            self.get_logger().error(f'Failed to connect to {self.serial_port}: {e}')
-            # 错误处理
-            self.destroy_node()
-            rclpy.shutdown()
+        self.connect_serial()
         # 创建订阅者，订阅导航数据话题，把计算好的数据发给单片机/red_standard_robot1/cmd_vel_nav2_result 
         self.subscription = self.create_subscription(Twist, '/red_standard_robot1/cmd_vel', self.SendtoSTM32_callback, 10)
         self.subscription_1 = self.create_subscription(Int8, 'nav2_status',self.Nav2Stat_callback,10)
@@ -43,6 +38,22 @@ class SerialNode(Node):
             self.patrol_state_callback, 
             10
         )
+
+    def connect_serial(self):
+        try:
+            if self.serial_conn and self.serial_conn.is_open:
+                self.serial_conn.close()
+            self.serial_conn = serial.Serial(self.serial_port, self.baud_rate, timeout=1)
+            self.get_logger().info(f'成功连接到串口 {self.serial_port}')
+            self.reconnect_attempts = 0
+        except serial.SerialException as e:
+            self.reconnect_attempts += 1
+            if self.reconnect_attempts < self.max_reconnect:
+                self.get_logger().warn(f'串口连接失败 (尝试 {self.reconnect_attempts}/{self.max_reconnect}): {e}')
+                # 创建定时器尝试重连
+                self.create_timer(2.0, self.connect_serial)
+            else:
+                self.get_logger().error(f'串口连接失败达到最大尝试次数: {e}')
 
     def read_serial_data(self):
         if self.serial_conn and self.serial_conn.is_open:
@@ -80,10 +91,10 @@ class SerialNode(Node):
         # msg.target_vy = float(data.get('target_vy', 0.0))  # 目标y轴速度
         # msg.target_vz = float(data.get('target_vz', 0.0))  # 目标z轴速度
         # 这里不要加目标速度，会导致tf树有问题，也会导致串口发不出去也收不到
-        target_pose = data.get('target_pose', [0.0, 0.0, 0.0])
-        msg.target_pose[0] = float(target_pose[0])
-        msg.target_pose[1] = float(target_pose[1])
-        msg.target_pose[2] = float(target_pose[2])
+        # target_pose = data.get('target_pose', [0.0, 0.0, 0.0])
+        # msg.target_pose[0] = float(target_pose[0])
+        # msg.target_pose[1] = float(target_pose[1])
+        # msg.target_pose[2] = float(target_pose[2])
         # 发布消息
         self.publisher_.publish(msg)
     def Nav2Stat_callback(self,msg):
@@ -95,41 +106,43 @@ class SerialNode(Node):
 
     def SendtoSTM32_callback(self, msg):
         """接收来自ROS2的指令，并发送给单片机"""
-        if self.serial_conn and self.serial_conn.is_open:
-            try:
-                # 数据字段定义
-                header = 0xAA
-                checksum = 19
-                x_speed = msg.linear.x * 0.5
-                y_speed = msg.linear.y * 0.5
-                
-                # 根据特殊路径状态设置rotate值
-                if self.special_path:
-                    rotate = 1.0  # 从巡逻点3到巡逻点5时设置为1
-                    self.get_logger().info("特殊路径上: rotate=1.0")
-                else:
-                    rotate = 0.0  # 其他情况设置为0
-                
-                yaw_speed = msg.angular.z  # yaw_speed保持不变
-                running_state = 0x00
-                
-                data_frame = struct.pack(
-                    '<BBffffB',  # 格式化字符串：<表示小端，B表示uint8_t，f表示float
-                    header,         # uint8_t
-                    checksum,       # uint8_t
-                    x_speed,        # float
-                    y_speed,        # float
-                    rotate,         # float
-                    yaw_speed,      # float
-                    running_state   # uint8_t
-                )
-                # 发送数据
-                self.serial_conn.write(data_frame)
-                self.get_logger().info(f'Sent data to STM32: x_speed={x_speed}, y_speed={y_speed}, rotate={rotate}')
-            except serial.SerialException as e:
-                self.get_logger().error(f'Error sending data to STM32: {e}')
-        else:
-            self.get_logger().warning('Serial connection is not open.')
+        if not self.serial_conn or not self.serial_conn.is_open:
+            self.get_logger().warning('串口未连接，无法发送数据')
+            return
+        
+        try:
+            # 数据字段定义
+            header = 0xAA
+            checksum = 19
+            x_speed = msg.linear.x * 0.5
+            y_speed = msg.linear.y * 0.5
+            
+            # 根据特殊路径状态设置rotate值
+            if self.special_path:
+                rotate = 1.0  # 从巡逻点3到巡逻点5时设置为1
+                self.get_logger().info("特殊路径上: rotate=1.0")
+            else:
+                rotate = 0.0  # 其他情况设置为0
+            
+            yaw_speed = msg.angular.z  # yaw_speed保持不变
+            running_state = 0x00
+            
+            data_frame = struct.pack(
+                '<BBffffB',  # 格式化字符串：<表示小端，B表示uint8_t，f表示float
+                header,         # uint8_t
+                checksum,       # uint8_t
+                x_speed,        # float
+                y_speed,        # float
+                rotate,         # float
+                yaw_speed,      # float
+                running_state   # uint8_t
+            )
+            # 发送数据
+            self.serial_conn.write(data_frame)
+        except Exception as e:
+            self.get_logger().error(f'发送数据到STM32时出错: {e}')
+            # 尝试重新连接
+            self.connect_serial()
 
     def __del__(self):
         if self.serial_conn and self.serial_conn.is_open:
@@ -142,11 +155,17 @@ def ros_spin_thread(node):
 def main(args=None):
     rclpy.init(args=args)
     serial_node = SerialNode()
-    spin_thread = threading.Thread(target=ros_spin_thread, args=(serial_node,))
-    spin_thread.start()
-    spin_thread.join()
-    serial_node.destroy_node()
-    rclpy.shutdown()
+    try:
+        spin_thread = threading.Thread(target=ros_spin_thread, args=(serial_node,))
+        spin_thread.start()
+        spin_thread.join()
+    except Exception as e:
+        print(f"主循环异常: {e}")
+    finally:
+        if serial_node.serial_conn and serial_node.serial_conn.is_open:
+            serial_node.serial_conn.close()
+        serial_node.destroy_node()
+        rclpy.shutdown()
 
 if __name__ == '__main__':
     main()
