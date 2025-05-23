@@ -23,6 +23,6 @@ sleep 3
 
 
 # 运行第三个 ROS 2 启动文件
-gnome-terminal -- bash -c "source install/setup.bash && ros2 launch my_nav_controller #navigation_client.launch.py; exec bash"
+gnome-terminal -- bash -c "source install/setup.bash && ros2 launch my_nav_controller navigation_client.launch.py; exec bash"
 
 

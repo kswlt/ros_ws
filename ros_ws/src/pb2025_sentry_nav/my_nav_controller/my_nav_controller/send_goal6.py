@@ -74,6 +74,10 @@ class NavigationClient(Node):
         
         self.robot_state = "初始化"          # 机器人状态
         
+        # 在类中添加重试计数变量
+        self.heal_retry_count = 0
+        self.max_heal_retries = 3  # 最大重试次数
+
         self.get_logger().info("导航系统初始化完成，等待比赛开始...")
 
     def send_goal(self, target_id):
@@ -181,9 +185,18 @@ class NavigationClient(Node):
             
             # 如果前往回血点失败，重置标志
             if self.current_target == self.navigating_to_heal_point_id and self.is_going_to_heal:
-                self.get_logger().warn("前往回血点失败")
-                self.is_going_to_heal = False
-                
+                self.heal_retry_count += 1
+                if self.heal_retry_count < self.max_heal_retries:
+                    self.get_logger().warn(f"前往回血点失败，第{self.heal_retry_count}次重试")
+                    retry_timer = self.create_timer(1.0, lambda: self.retry_navigation(self.current_target))
+                    # 确保这个定时器是一次性的
+                    self.create_timer(0.1, lambda: self.destroy_timer(retry_timer))
+                else:
+                    self.get_logger().error(f"前往回血点失败次数达到上限({self.max_heal_retries}次)，放弃回血")
+                    self.is_going_to_heal = False
+                    self.heal_retry_count = 0
+                    # 可以考虑尝试不同的回血点或者切换到其他策略
+            
             # 5秒后重试导航
             retry_timer = self.create_timer(1.0, lambda: self.retry_navigation(self.current_target))
             # 确保这个定时器是一次性的
@@ -195,6 +208,9 @@ class NavigationClient(Node):
     def retry_navigation(self, target_id):
         """重试导航到指定目标点"""
         self.get_logger().info(f"重试导航到目标点{target_id}")
+        if target_id == self.navigating_to_heal_point_id:
+            # 前往回血点时保持标志一致
+            self.is_going_to_heal = True
         self.send_goal(target_id)
 
     def cancel_goal(self):
